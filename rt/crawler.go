@@ -1,7 +1,6 @@
 package rt
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,21 +11,22 @@ import (
 	"github.com/LarsFox/diploma-news-crawler/models"
 )
 
-// Crawler собирает статьи из Раша-Тудэй.
-type Crawler struct {
-	*models.BaseCrawler
+const (
+	urlArticle  = "https://russian.rt.com%s"
+	urlArticles = "https://russian.rt.com/listing/type.News.tag.novosty-glavnoe/prepare/%s/%d/%d"
+)
+
+// Crawler works with Russian rt.com.
+type Crawler struct{}
+
+// New returns a new crawler.
+func New() *Crawler {
+	return &Crawler{}
 }
 
-// NewCrawler возвращает новый сборщик статей из Раша-Тудэй.
-func NewCrawler(categories []string, perPage int) *Crawler {
-	return &Crawler{
-		BaseCrawler: models.NewBaseCrawler(categories, "rt", perPage),
-	}
-}
-
-// Category возвращает статьи из категории.
-func (c *Crawler) Category(category string, offset int) ([]*models.Article, error) {
-	u := fmt.Sprintf(urlArticles, category, c.PerPage(), offset/c.PerPage())
+// Category lists articles in a category.
+func (c *Crawler) Category(category string, offset, perPage int) ([]*models.Article, error) {
+	u := fmt.Sprintf(urlArticles, category, perPage, offset/perPage)
 	resp, err := http.DefaultClient.Get(u)
 	if err != nil {
 		return nil, fmt.Errorf("error getting category: %w", err)
@@ -40,7 +40,7 @@ func (c *Crawler) Category(category string, offset int) ([]*models.Article, erro
 
 	linksBlock := extractNode(document, "listing__rows")
 	if linksBlock == nil {
-		return nil, errors.New("linksBlock is nil: " + u)
+		return nil, fmt.Errorf("linksBlock is nil: %s", u)
 	}
 
 	cards := gatherNodes(linksBlock, "card__heading")
@@ -64,7 +64,7 @@ func (c *Crawler) Category(category string, offset int) ([]*models.Article, erro
 	return articles, nil
 }
 
-// Enrich обогащает данные о статье.
+// Enrich parses article text.
 func (c *Crawler) Enrich(article *models.Article) error {
 	resp, err := http.DefaultClient.Get(article.URL)
 	if err != nil {
@@ -77,18 +77,52 @@ func (c *Crawler) Enrich(article *models.Article) error {
 		return fmt.Errorf("err parsing page: %w", err)
 	}
 
-	textsBlock := extractNode(document, "article__text")
+	textsBlock := mustNode(
+		extractNode(document, "article__text"),
+		extractNode(document, "News-view"),
+	)
+
 	if textsBlock == nil {
 		return nil
 	}
 
-	src := parseNode(textsBlock)
-	if src == "" {
-		return nil
+	h1 := extractHeader(document)
+	if h1 == "" {
+		return fmt.Errorf("no header")
 	}
 
+	src := parseNode(textsBlock)
+	if src == "" {
+		return fmt.Errorf("no text")
+	}
+
+	src = h1 + "\n\n" + src
 	src = strings.ReplaceAll(src, ".", ". ")
 	article.Text = src
+	return nil
+}
+
+func extractHeader(document *html.Node) string {
+	h1 := mustNode(
+		extractNode(document, "News-view_title"),
+		extractNode(document, "article__heading"),
+	)
+
+	if h1 == nil {
+		return ""
+	}
+	if h1.FirstChild != nil && h1.FirstChild.Type == html.TextNode {
+		return h1.FirstChild.Data
+	}
+	return ""
+}
+
+func mustNode(nodes ...*html.Node) *html.Node {
+	for _, node := range nodes {
+		if node != nil {
+			return node
+		}
+	}
 	return nil
 }
 
@@ -135,10 +169,10 @@ func parseNode(node *html.Node) string {
 
 	case html.ElementNode:
 		switch node.Data {
-		// Проверяем вложенность.
+		// Checking inner nodes.
 		case "div", "p", "a", "span", "u", "ul", "li", "sup", "quote", "blockquote":
 
-		// Не проверяем вложенность.
+		// Ignoring inner nodes.
 		case "img", "em", "br", "hr", "h1", "h2", "h3", "h4", "strong", "figure", "script", "iframe":
 			return ""
 

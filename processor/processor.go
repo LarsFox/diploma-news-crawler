@@ -11,28 +11,34 @@ import (
 
 // Processor ...
 type Processor struct {
-	maxWorkers int
-	total      int
-	storage    storage
-	wg         sync.WaitGroup
+	categories   []string
+	crawler      crawler
+	maxWorkers   int
+	name         string
+	perPage      int
+	storage      storage
+	total        int
+	wgArticles   sync.WaitGroup
+	wgCategories sync.WaitGroup
 }
 
-// New ...
-func New(maxWorkers, total int, storage storage) *Processor {
+// New returns a new processor for news crawling.
+func New(name string, crawler crawler, categories []string, maxWorkers, perPage, total int, storage storage) *Processor {
 	return &Processor{
-		maxWorkers: maxWorkers,
-		total:      total,
-		storage:    storage,
-		wg:         sync.WaitGroup{},
+		categories:   categories,
+		crawler:      crawler,
+		maxWorkers:   maxWorkers,
+		name:         name,
+		perPage:      perPage,
+		storage:      storage,
+		total:        total,
+		wgArticles:   sync.WaitGroup{},
+		wgCategories: sync.WaitGroup{},
 	}
 }
 
 type crawler interface {
-	Categories() []string
-	Name() string
-	PerPage() int
-
-	Category(category string, offset int) ([]*models.Article, error)
+	Category(category string, offset, perPage int) ([]*models.Article, error)
 	Enrich(article *models.Article) error
 }
 
@@ -40,42 +46,59 @@ type storage interface {
 	Save(name string, article *models.Article) error
 }
 
-// Run запускает все сборщики.
-// На каждого сборщика создается икс рутин по запросу и сохранению, плюс по одной на запрос каждой категории.
-func (p *Processor) Run(crawlers ...crawler) {
-	log.Println("starting processor")
+// Go runs all processors concurrently.
+func Go(processors ...*Processor) {
+	wg := &sync.WaitGroup{}
+	wg.Add(len(processors))
 
-	for _, c := range crawlers {
-		ch := make(chan *models.Article, p.maxWorkers)
-		log := log.New(os.Stdout, c.Name()+": ", log.Default().Flags())
-
-		var total int64
-		for i := 0; i < p.maxWorkers; i++ {
-			p.wg.Add(1)
-			go p.save(log, c, ch, &total)
-		}
-
-		for _, cat := range c.Categories() {
-			p.wg.Add(1)
-			go p.crawl(log, c, ch, cat, &total)
-		}
+	for _, p := range processors {
+		p := p
+		go func() {
+			defer wg.Done()
+			p.run()
+		}()
 	}
-	p.wg.Wait()
+	wg.Wait()
 }
 
-// crawl собирает статьи группами по определенной категории и передает их сборщикам.
-func (p *Processor) crawl(log *log.Logger, c crawler, ch chan *models.Article, cat string, total *int64) {
-	defer p.wg.Done()
-	defer close(ch)
+// Run starts news crawling.
+// Each processor runs x goroutines, where x == maxWorkers+len(categories).
+func (p *Processor) run() {
+	log.Printf("Starting processor %s", p.name)
+
+	ch := make(chan *models.Article, p.maxWorkers)
+
+	var total int64
+	for i := 0; i < p.maxWorkers; i++ {
+		p.wgArticles.Add(1)
+		go p.save(ch, &total)
+	}
+
+	for _, cat := range p.categories {
+		p.wgCategories.Add(1)
+		go p.crawl(ch, cat, &total)
+	}
+
+	p.wgCategories.Wait()
+
+	close(ch)
+
+	p.wgArticles.Wait()
+}
+
+// crawl passes articles from categories to workers.
+func (p *Processor) crawl(ch chan *models.Article, cat string, total *int64) {
+	defer p.wgCategories.Done()
+	log := log.New(os.Stdout, p.name+"-categories: ", log.Default().Flags())
 
 	var retries int64
-	for offset := 0; int(atomic.LoadInt64(total)) < p.total; offset += c.PerPage() {
+	for offset := 0; int(atomic.LoadInt64(total)) < p.total; offset += p.perPage {
 		if retries > 100 {
 			log.Printf("exhausted, finishing category %s", cat)
 			return
 		}
 
-		articles, err := c.Category(cat, offset)
+		articles, err := p.crawler.Category(cat, offset, p.perPage)
 		if err != nil {
 			retries++
 			log.Println(err)
@@ -93,11 +116,14 @@ func (p *Processor) crawl(log *log.Logger, c crawler, ch chan *models.Article, c
 	}
 }
 
-// save ожидает статьи и сохраняет их.
-func (p *Processor) save(log *log.Logger, c crawler, ch chan *models.Article, total *int64) {
+// save enriches the article and passes it to storage.
+func (p *Processor) save(ch chan *models.Article, total *int64) {
+	defer p.wgArticles.Done()
+	log := log.New(os.Stdout, p.name+"-articles: ", log.Default().Flags())
+
 	for article := range ch {
-		if err := c.Enrich(article); err != nil {
-			log.Println(err)
+		if err := p.crawler.Enrich(article); err != nil {
+			log.Printf("%s err enriching err: %v", article.URL, err)
 			continue
 		}
 
@@ -106,12 +132,11 @@ func (p *Processor) save(log *log.Logger, c crawler, ch chan *models.Article, to
 			continue
 		}
 
-		if err := p.storage.Save(c.Name(), article); err != nil {
+		if err := p.storage.Save(p.name, article); err != nil {
 			log.Println(err)
 			continue
 		}
 
 		atomic.AddInt64(total, 1)
 	}
-	p.wg.Done()
 }

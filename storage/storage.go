@@ -7,7 +7,7 @@ import (
 	"github.com/LarsFox/diploma-news-crawler/models"
 )
 
-// Storage — хранилище.
+// Storage is a plain txt file saver.
 type Storage struct {
 	dir string
 }
@@ -17,7 +17,7 @@ const (
 	saveFilePath = dirPath + "/%s.txt"
 )
 
-// New запускает новое хранилище и подготавливает все нужные папки.
+// New returns a new storage client and creates all the necessary directories for future files.
 func New(dir string, crawlCategories map[string][]string) (*Storage, error) {
 	for crawler, cats := range crawlCategories {
 		for _, cat := range cats {
@@ -29,7 +29,7 @@ func New(dir string, crawlCategories map[string][]string) (*Storage, error) {
 	return &Storage{dir: dir}, nil
 }
 
-// Save сохраняет статью от определенного сборщика.
+// Save creates a new .txt file in a specific category with the article text.
 func (s *Storage) Save(name string, article *models.Article) error {
 	articlePath := fmt.Sprintf(saveFilePath, s.dir, name, article.Category, article.ID)
 	if err := os.WriteFile(articlePath, []byte(article.Text), 0744); err != nil {

@@ -13,21 +13,17 @@ import (
 	"github.com/LarsFox/diploma-news-crawler/models"
 )
 
-// Crawler собирает статьи из ТАССа.
-type Crawler struct {
-	*models.BaseCrawler
+// Crawler works with tass.ru.
+type Crawler struct{}
+
+// New returns a new crawler.
+func New() *Crawler {
+	return &Crawler{}
 }
 
-// NewCrawler возвращает новый сборщик статей из ТАССа.
-func NewCrawler(categories []string, perPage int) *Crawler {
-	return &Crawler{
-		BaseCrawler: models.NewBaseCrawler(categories, "tass", perPage),
-	}
-}
-
-// Category возвращает статьи из категории.
-func (c *Crawler) Category(category string, offset int) ([]*models.Article, error) {
-	u := fmt.Sprintf(urlArticles, category, c.PerPage(), offset)
+// Category lists articles in a category.
+func (c *Crawler) Category(category string, offset, perPage int) ([]*models.Article, error) {
+	u := fmt.Sprintf(urlArticles, category, perPage, offset)
 	resp, err := http.DefaultClient.Get(u)
 	if err != nil {
 		return nil, fmt.Errorf("error getting category: %w", err)
@@ -64,7 +60,7 @@ func newArticle(category string, item *respArticlesNews) *models.Article {
 	}
 }
 
-// Enrich обогащает данные о статье.
+// Enrich parses article text.
 func (c *Crawler) Enrich(article *models.Article) error {
 	resp, err := http.DefaultClient.Get(article.URL)
 	if err != nil {
@@ -77,17 +73,54 @@ func (c *Crawler) Enrich(article *models.Article) error {
 		return fmt.Errorf("err parsing page: %w", err)
 	}
 
-	textsBlock := extractNode(document, "text-content")
+	h1 := extractHeader(document)
+	if h1 == "" {
+		return fmt.Errorf("no header")
+	}
+
+	textsBlock := mustNode(
+		extractNode(document, "text-content"),
+		extractNode(document, "text-content text-content_article"),
+		extractNode(document, "text-block"),
+	)
 	if textsBlock == nil {
 		return nil
 	}
 
 	src := parseNode(textsBlock)
-	if src == "" {
-		return nil
+	if strings.Trim(src, "\n") == "" {
+		return fmt.Errorf("no text")
 	}
 
+	src = h1 + "\n\n" + src
 	article.Text = regTASS.ReplaceAllString(src, "")
+	return nil
+}
+
+func extractHeader(document *html.Node) string {
+	if wrap := extractNode(document, "article__title-wrap"); wrap != nil {
+		if text := parseNode(wrap); text != "" {
+			return text
+		}
+	}
+
+	h1 := extractNode(document, "news-header__title")
+	if h1 == nil {
+		return ""
+	}
+
+	if h1.FirstChild != nil && h1.FirstChild.Type == html.TextNode {
+		return h1.FirstChild.Data
+	}
+	return ""
+}
+
+func mustNode(nodes ...*html.Node) *html.Node {
+	for _, node := range nodes {
+		if node != nil {
+			return node
+		}
+	}
 	return nil
 }
 
@@ -111,7 +144,6 @@ func parseNode(node *html.Node) string {
 		return ""
 	}
 
-	// log.Println(node.Type, node.Data)
 	switch node.Type {
 	case html.TextNode:
 		return node.Data
@@ -125,10 +157,10 @@ func parseNode(node *html.Node) string {
 				}
 			}
 
-		// Проверяем вложенность.
-		case "p", "a", "span", "u", "ul", "li", "sup":
+		// Checking inner nodes.
+		case "p", "a", "span", "u", "ul", "ol", "li", "sup", "h1":
 
-		// Не проверяем вложенность.
+		// Ingoring inner nodes.
 		case "em", "br", "hr", "h2", "strong":
 			return ""
 

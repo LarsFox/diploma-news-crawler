@@ -1,3 +1,3 @@
-# Сборщик новостей для диплома
+# News crawler for my final thesis
 
-Работаем.
+Work in progress.
