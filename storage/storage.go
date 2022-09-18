@@ -17,7 +17,7 @@ const (
 	saveFilePath = dirPath + "/%s.txt"
 )
 
-// New returns a new storage client and creates all the necessary directories for future files.
+// New returns a new storage client and creates all the necessary directories for the future files.
 func New(dir string, crawlCategories map[string][]string) (*Storage, error) {
 	for crawler, cats := range crawlCategories {
 		for _, cat := range cats {

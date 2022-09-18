@@ -46,7 +46,7 @@ type storage interface {
 	Save(name string, article *models.Article) error
 }
 
-// Go runs all processors concurrently.
+// Go starts all processors concurrently.
 func Go(processors ...*Processor) {
 	wg := &sync.WaitGroup{}
 	wg.Add(len(processors))
@@ -61,7 +61,7 @@ func Go(processors ...*Processor) {
 	wg.Wait()
 }
 
-// Run starts news crawling.
+// run starts news crawling process.
 // Each processor runs x goroutines, where x == maxWorkers+len(categories).
 func (p *Processor) run() {
 	log.Printf("Starting processor %s", p.name)

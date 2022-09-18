@@ -1,3 +1,3 @@
 # News crawler for my final thesis
 
-Work in progress.
+Gathers lots of articles and puts them in a directory. Suitable for training your models!
